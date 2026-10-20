@@ -8,6 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.metrics import ConfusionMatrixDisplay
+from scripts.plot_correlations import plot_correlations
 
 
 def plot_results(run, output=None):
@@ -61,6 +62,7 @@ def plot_results(run, output=None):
         fig.suptitle('First two image components only; SVC uses all merged features', fontsize=11)
         fig.savefig(output / 'pca_projection.png', dpi=180)
         plt.close(fig)
+    plot_correlations(run, output)
     print(f'Plots saved to {output.resolve()}')
     return output
 
