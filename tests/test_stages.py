@@ -12,12 +12,22 @@ from PIL import Image
 import test_ml_training
 from scripts.extract_features import extract
 from scripts.train_model import train_cached
-from scripts.prepare_data import prepare
+from scripts.prepare_data import prepare, validate_catalog_ids
 from scripts.import_stamps import import_stamps
 from scripts.download_data import download, sha256
 
 
 class StagesTests(unittest.TestCase):
+    def test_catalog_duplicate_policy(self):
+        data = pd.DataFrame({'specobjid': pd.Series(['123', '123'], dtype='string'), 'spiral': [1, 1]})
+        self.assertEqual(len(validate_catalog_ids(data)), 1)
+        data.loc[1, 'spiral'] = 0
+        with self.assertRaisesRegex(ValueError, 'conflicting records'):
+            validate_catalog_ids(data)
+        data.loc[1, 'specobjid'] = pd.NA
+        with self.assertRaisesRegex(ValueError, 'missing specobjid'):
+            validate_catalog_ids(data)
+
     def test_reader_closes_connection_on_success_and_error(self):
         from scripts.ml_training import load_dataset
         with tempfile.TemporaryDirectory() as folder:

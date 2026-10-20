@@ -7,13 +7,33 @@ from scripts.ml_training import assign_splits
 from scripts.cutouts import prepare_manifest
 
 
+def validate_catalog_ids(data):
+    if 'specobjid' not in data:
+        raise ValueError('Catalog must contain a specobjid column.')
+    missing = data.specobjid.isna() | data.specobjid.str.strip().eq('')
+    if missing.any():
+        raise ValueError(f'Catalog contains {int(missing.sum())} rows with missing specobjid. Inspect these rows before preparing data.')
+    unique = data.drop_duplicates().copy()
+    removed = len(data) - len(unique)
+    if removed:
+        print(f'Removed {removed} exact duplicate catalog rows.')
+    repeated = unique.specobjid.duplicated(keep=False)
+    if repeated.any():
+        ids = unique.loc[repeated, 'specobjid'].drop_duplicates()
+        raise ValueError(
+            f'Catalog contains {len(ids)} specobjid values with conflicting records '
+            f'({int(repeated.sum())} rows). Example IDs: {ids.head(5).tolist()}. '
+            'Inspect or resolve the catalog join; no arbitrary record was selected.'
+        )
+    return unique
+
+
 def prepare(catalog, output, database, per_class=1000, seed=42, clean=True):
     output = Path(output)
     if output.exists() or Path(database).exists():
         raise ValueError('Prepared catalog or database already exists. Reuse it, or choose new paths.')
     data = pd.read_csv(catalog, dtype={'specobjid': 'string'})
-    if data.specobjid.isna().any() or data.specobjid.duplicated().any():
-        raise ValueError('specobjid must be non-null and unique.')
+    data = validate_catalog_ids(data)
     if clean:
         data, log = clean_sample(data.replace(-9999, float('nan')))
         print(log.to_string(index=False))
