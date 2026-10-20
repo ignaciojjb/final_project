@@ -4,3 +4,4 @@ scikit-learn==1.8.0
 Pillow==12.3.0
 joblib==1.5.3
 certifi==2026.07.22
+matplotlib==3.10.8
