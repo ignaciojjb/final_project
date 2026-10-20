@@ -1,6 +1,8 @@
 """Train a leakage-safe photometry + grayscale/PCA galaxy SVC."""
 from __future__ import annotations
 
+from contextlib import closing
+
 import argparse
 from io import BytesIO
 import json
@@ -58,7 +60,7 @@ def load_dataset(catalog_path, database_path):
     if not database.is_file():
         raise FileNotFoundError(database)
     vectors, records = [], []
-    with sqlite3.connect(database.as_uri() + '?mode=ro', uri=True) as connection:
+    with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as connection:
         for object_id, blob, label, split in connection.execute(
             "SELECT object_id, image, label, split FROM cutouts WHERE status='downloaded' ORDER BY object_id"
         ):

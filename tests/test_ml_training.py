@@ -1,3 +1,4 @@
+from contextlib import closing
 import io
 import json
 from pathlib import Path
@@ -24,7 +25,7 @@ class TrainingTests(unittest.TestCase):
         rng = np.random.default_rng(42)
         rows = []
         db = root / 'images.sqlite'
-        with sqlite3.connect(db) as con:
+        with closing(sqlite3.connect(db)) as con, con:
             con.execute('CREATE TABLE cutouts(object_id TEXT PRIMARY KEY, image BLOB, label INTEGER, split TEXT, status TEXT)')
             for i in range(112):
                 label = i % 2
@@ -59,7 +60,7 @@ class TrainingTests(unittest.TestCase):
     def test_label_mismatch_fails(self):
         with tempfile.TemporaryDirectory() as folder:
             catalog, db = self.fixture(Path(folder))
-            with sqlite3.connect(db) as con:
+            with closing(sqlite3.connect(db)) as con, con:
                 con.execute('UPDATE cutouts SET label=1-label')
             with self.assertRaisesRegex(ValueError, 'disagree'):
                 load_dataset(catalog, db)

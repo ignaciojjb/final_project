@@ -13,6 +13,12 @@ def train_cached(features, output, c=1.0, gamma='scale'):
     output = Path(output)
     if output.exists():
         raise ValueError('Run directory exists. Choose a different --output to preserve results.')
+    if not Path(features).is_file():
+        raise FileNotFoundError(
+            f'Feature cache not found: {features}. First run '
+            'python -m scripts.extract_features --components 64 '
+            '(requires a prepared catalog and downloaded/imported images).'
+        )
     cache = joblib.load(features)  # Only use artifacts created by this project/trusted sources.
     metadata, x = cache['metadata'], cache['X']
     classifier = SVC(C=c, gamma=gamma, kernel='rbf', class_weight='balanced')

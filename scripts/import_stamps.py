@@ -1,3 +1,4 @@
+from contextlib import closing
 """Import ZIP images into an existing manifest through an explicit ID/path mapping."""
 import argparse
 from io import BytesIO
@@ -14,7 +15,7 @@ def import_stamps(archive, mapping, database):
         raise ValueError('Mapping CSV needs specobjid,image_path columns (exact ZIP member names).')
     if mapping.isna().any().any() or mapping.specobjid.duplicated().any() or mapping.image_path.duplicated().any():
         raise ValueError('Mapping must contain unique non-null IDs and image paths.')
-    with zipfile.ZipFile(archive) as source, sqlite3.connect(Path(database).resolve().as_uri() + '?mode=rw', uri=True) as con:
+    with zipfile.ZipFile(archive) as source, closing(sqlite3.connect(Path(database).resolve().as_uri() + '?mode=rw', uri=True)) as con, con:
         imported = 0
         for row in mapping.itertuples(index=False):
             record = con.execute('SELECT status FROM cutouts WHERE object_id=?', (row.specobjid,)).fetchone()

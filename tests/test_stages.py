@@ -1,3 +1,4 @@
+from contextlib import closing
 import io
 from pathlib import Path
 import sqlite3
@@ -17,6 +18,27 @@ from scripts.download_data import download, sha256
 
 
 class StagesTests(unittest.TestCase):
+    def test_reader_closes_connection_on_success_and_error(self):
+        from scripts.ml_training import load_dataset
+        with tempfile.TemporaryDirectory() as folder:
+            catalog, database = test_ml_training.TrainingTests().fixture(Path(folder))
+            original_connect = sqlite3.connect
+            connections = []
+
+            def tracked_connect(*args, **kwargs):
+                connection = original_connect(*args, **kwargs)
+                connections.append(connection)
+                return connection
+
+            with patch('scripts.ml_training.sqlite3.connect', side_effect=tracked_connect):
+                load_dataset(catalog, database)
+                with patch('scripts.ml_training.stamp_to_features', side_effect=ValueError('invalid image')):
+                    with self.assertRaisesRegex(ValueError, 'Cannot decode'):
+                        load_dataset(catalog, database)
+            for connection in connections:
+                with self.assertRaises(sqlite3.ProgrammingError):
+                    connection.execute('SELECT 1')
+
     def test_cache_retraining_and_invalidation(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
@@ -48,7 +70,7 @@ class StagesTests(unittest.TestCase):
             pd.DataFrame({'specobjid': [data.specobjid.iloc[0]], 'image_path': ['stamp.png']}).to_csv(root/'mapping.csv', index=False)
             import_stamps(root/'stamps.zip', root/'mapping.csv', db)
             import_stamps(root/'stamps.zip', root/'mapping.csv', db)
-            with sqlite3.connect(db) as con:
+            with closing(sqlite3.connect(db)) as con, con:
                 self.assertEqual(con.execute("SELECT count(*) FROM cutouts WHERE status='downloaded'").fetchone()[0], 1)
 
     def test_download_checksum_and_reuse(self):
