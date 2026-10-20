@@ -18,6 +18,21 @@ from scripts.download_data import download, sha256
 
 
 class StagesTests(unittest.TestCase):
+    def test_nearest_dr8_match_policy(self):
+        data = pd.DataFrame({'specobjid': pd.Series(['123', '123'], dtype='string'),
+                             'spiral': [1, 1], 'dr8objid': ['456', '789'],
+                             'distance': [0.000250, 0.000003]})
+        nearest = validate_catalog_ids(data, resolve_dr8_matches=True)
+        self.assertEqual(nearest.dr8objid.tolist(), ['789'])
+        for bad_distance in [0.000250, -1, float('nan'), float('inf')]:
+            bad = data.copy()
+            bad.loc[1, 'distance'] = bad_distance
+            with self.assertRaisesRegex(ValueError, 'conflicting records'):
+                validate_catalog_ids(bad, resolve_dr8_matches=True)
+        data.loc[1, 'spiral'] = 0
+        with self.assertRaisesRegex(ValueError, 'conflicting records'):
+            validate_catalog_ids(data, resolve_dr8_matches=True)
+
     def test_catalog_duplicate_policy(self):
         data = pd.DataFrame({'specobjid': pd.Series(['123', '123'], dtype='string'), 'spiral': [1, 1]})
         self.assertEqual(len(validate_catalog_ids(data)), 1)
