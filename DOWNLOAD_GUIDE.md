@@ -1,5 +1,7 @@
 # SDSS download and feature audit
 
+[Documentation index](README.md#documentation) · [Full workflow](docs/WORKFLOW.md) · [Model and feature definitions](docs/DATA_AND_MODEL.md) · [Troubleshooting](docs/TROUBLESHOOTING.md)
+
 ## Confirmed correction: hips2fits field-of-view units
 
 The earlier code sent `fov_arcsec` directly to the hips2fits `fov` parameter. CDS requires **decimal degrees**, so an intended 16-arcsecond stamp covered 16 degrees. The corrected request divides by 3600:
