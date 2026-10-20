@@ -84,3 +84,15 @@ Si `specobjid` tiene múltiples coincidencias DR8, se puede añadir `--resolve-d
 Después de entrenar, ejecutar `python -m scripts.plot_results --run artifacts/runs/svc-sample100-001`. Guarda PNG en `plots/` dentro de la ejecución: matrices de confusión, accuracy/balanced accuracy, precisión/recall/F1 por clase y proyección de los primeros dos componentes de imagen. No reentrena ni requiere abrir ventanas gráficas. La proyección muestra solo dos componentes estandarizados, no la frontera del SVC que usa todas las características. Las métricas de muestras pequeñas tienen incertidumbre; comparar configuraciones con validación, sin utilizar test para seleccionar parámetros.
 
 Para ver 10 imágenes con etiqueta del catálogo y predicción: `python -m scripts.plot_predictions --run artifacts/runs/svc-sample1000-001 --database datasets/images/sample1000.sqlite --count 10`. Usa la base de imágenes de esa ejecución. Guarda `plots/predictions_test.png`, con títulos verdes para aciertos y rojos para errores, e IDs. Usa `--split validation` para validación, `--seed 7` para otra muestra y `--errors-only` para mostrar únicamente fallos (falla con un mensaje claro si no hay ninguno). Si hay menos de 10 objetos elegibles, muestra todos. Las etiquetas de referencia son las del catálogo, no una verificación independiente. La imagen se muestra a color; el modelo utiliza su conversión gris 64×64 más fotometría.
+
+Para descargar versiones de mayor resolución **solo de las imágenes seleccionadas para la galería**, añadir `--display-resolution 256`:
+
+```powershell
+.\.venv\Scripts\python.exe -m scripts.plot_predictions `
+  --run artifacts/runs/svc-sample1000-001 `
+  --database datasets/images/sample1000.sqlite `
+  --count 10 `
+  --display-resolution 256
+```
+
+Se seleccionan los IDs primero y se solicitan únicamente esos recortes, con las mismas coordenadas, proveedor y campo de visión registrados para cada objeto. Se guardan en `plots/display_cache/` dentro de la ejecución y se reutilizan por URL/resolución; no se modifica SQLite, PCA, características ni predicciones. No requiere reentrenar. Sin esta opción se mantienen las imágenes originales sin peticiones de red. Se admiten de 64 a 1024 píxeles; 256 es una opción moderada. Si el proveedor falla o devuelve dimensiones incorrectas, se advierte y se utiliza el stamp original. Cada imagen indica la resolución que se muestra. Más píxeles no garantizan más detalle que el disponible en el levantamiento original. Las descargas se han probado con respuestas simuladas, sin acreditar disponibilidad del proveedor desde el equipo del usuario.
