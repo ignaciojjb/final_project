@@ -6,7 +6,7 @@ import joblib
 import pandas as pd
 from sklearn.pipeline import Pipeline
 from sklearn.svm import SVC
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, classification_report, confusion_matrix, roc_auc_score
 
 
 def train_cached(features, output, c=1.0, gamma='scale'):
@@ -38,11 +38,13 @@ def train_cached(features, output, c=1.0, gamma='scale'):
         mask = metadata['split'].eq(split).to_numpy()
         y = metadata.loc[mask, 'label']
         pred = classifier.predict(x[mask])
-        report[split] = {'accuracy': accuracy_score(y, pred), 'balanced_accuracy': balanced_accuracy_score(y, pred),
+        score = classifier.decision_function(x[mask])
+        report[split] = {'roc_auc': float(roc_auc_score(y, score)), 'accuracy': accuracy_score(y, pred), 'balanced_accuracy': balanced_accuracy_score(y, pred),
                          'confusion_matrix': confusion_matrix(y, pred, labels=[0, 1]).tolist(),
                          'classification_report': classification_report(y, pred, labels=[0, 1], output_dict=True, zero_division=0)}
         rows = metadata.loc[mask].copy()
         rows['prediction'] = pred
+        rows['decision_score'] = score
         predictions.append(rows)
     (output / 'metrics.json').write_text(json.dumps(report, indent=2) + '\n')
     pd.concat(predictions).to_csv(output / 'predictions.csv', index=False)

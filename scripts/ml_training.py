@@ -16,7 +16,7 @@ from PIL import Image
 from sklearn.compose import ColumnTransformer
 from sklearn.decomposition import PCA
 from sklearn.impute import SimpleImputer
-from sklearn.metrics import accuracy_score, balanced_accuracy_score, classification_report, confusion_matrix
+from sklearn.metrics import accuracy_score, balanced_accuracy_score, classification_report, confusion_matrix, roc_auc_score
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
@@ -128,13 +128,15 @@ def train(catalog, database, output, n_components=64, seed=42):
     for split in ['validation', 'test']:
         subset = data.loc[data['split'].eq(split)]
         predicted = model.predict(subset)
+        score = model.decision_function(subset)
         metrics[split] = {
+            'roc_auc': float(roc_auc_score(subset.label, score)),
             'accuracy': accuracy_score(subset.label, predicted),
             'balanced_accuracy': balanced_accuracy_score(subset.label, predicted),
             'confusion_matrix': confusion_matrix(subset.label, predicted, labels=[0, 1]).tolist(),
             'classification_report': classification_report(subset.label, predicted, labels=[0, 1], target_names=['elliptical', 'spiral'], output_dict=True, zero_division=0),
         }
-        predictions.append(pd.DataFrame({'specobjid': subset.specobjid, 'split': split, 'label': subset.label, 'prediction': predicted}))
+        predictions.append(pd.DataFrame({'specobjid': subset.specobjid, 'split': split, 'label': subset.label, 'prediction': predicted, 'decision_score': score}))
     pca = model.named_steps['features'].named_transformers_['stamp'].named_steps['pca']
     metrics['pca_explained_variance_ratio_sum'] = float(pca.explained_variance_ratio_.sum())
     output = Path(output)

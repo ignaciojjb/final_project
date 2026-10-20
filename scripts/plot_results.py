@@ -1,4 +1,4 @@
-"""Plot saved classification results without retraining or loading a model."""
+"""Plot saved classification results without retraining; older ROC runs load the saved model."""
 import argparse
 import json
 from pathlib import Path
@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import ConfusionMatrixDisplay
 from scripts.plot_correlations import plot_correlations
+from scripts.plot_roc import plot_roc
 
 
 def plot_results(run, output=None):
@@ -63,6 +64,7 @@ def plot_results(run, output=None):
         fig.savefig(output / 'pca_projection.png', dpi=180)
         plt.close(fig)
     plot_correlations(run, output)
+    plot_roc(run, output)
     print(f'Plots saved to {output.resolve()}')
     return output
 
