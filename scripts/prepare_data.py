@@ -9,11 +9,20 @@ from scripts.cutouts import prepare_manifest
 
 
 def validate_catalog_ids(data, resolve_dr8_matches=False):
+    """Return a copy with exact duplicate rows removed and IDs validated.
+
+    data must contain text specobjid values. Missing IDs and conflicting
+    records raise ValueError rather than selecting an arbitrary row.
+    resolve_dr8_matches opts into nearest-distance resolution only when
+    every column except dr8objid/distance agrees and the minimum is unique.
+    The caller's DataFrame and source CSV are not modified.
+    """
     if 'specobjid' not in data:
         raise ValueError('Catalog must contain a specobjid column.')
     missing = data.specobjid.isna() | data.specobjid.str.strip().eq('')
     if missing.any():
         raise ValueError(f'Catalog contains {int(missing.sum())} rows with missing specobjid. Inspect these rows before preparing data.')
+    # Equal IDs alone are insufficient: only entirely equal rows are safe duplicates.
     unique = data.drop_duplicates().copy()
     removed = len(data) - len(unique)
     if removed:
@@ -22,6 +31,7 @@ def validate_catalog_ids(data, resolve_dr8_matches=False):
     if resolve_dr8_matches and repeated.any() and {'dr8objid', 'distance'}.issubset(unique):
         discard = []
         for object_id, group in unique.loc[repeated].groupby('specobjid', sort=False):
+            # Restrict nearest-match resolution to otherwise identical measurements.
             different = set(group.columns[group.nunique(dropna=False).gt(1)])
             distances = pd.to_numeric(group.distance, errors='coerce')
             if (different <= {'dr8objid', 'distance'}
@@ -44,24 +54,37 @@ def validate_catalog_ids(data, resolve_dr8_matches=False):
 
 
 def prepare(catalog, output, database, per_class=1000, seed=42, clean=True, resolve_dr8_matches=False):
+    """Create a balanced prepared catalog and a pending-image SQLite manifest.
+
+    catalog is a raw compatible CSV; output and database must be new paths.
+    clean controls baseline quality cuts, not ID or class validation.
+    per_class is the count per label (0 means all eligible rows); seed makes
+    selection/splitting reproducible. Existing complete splits are retained.
+    Return prepared rows after writing the CSV and manifest. This stage
+    downloads no images and fits no preprocessing or classifier.
+    """
     output = Path(output)
     if output.exists() or Path(database).exists():
         raise ValueError('Prepared catalog or database already exists. Reuse it, or choose new paths.')
+    # 1. Preserve exact IDs before cleaning or cross-matching rows.
     data = pd.read_csv(catalog, dtype={c: 'string' for c in ['specobjid','objid','dr7objid','dr8objid']})
     data = validate_catalog_ids(data, resolve_dr8_matches)
     if clean:
         data, log = clean_sample(data.replace(-9999, float('nan')))
         print(log.to_string(index=False))
+    # 2. Labels are reference targets; discard ambiguous flags before balancing.
     valid = data.spiral.isin([0, 1]) & data.elliptical.isin([0, 1])
     valid &= data.spiral.add(data.elliptical).eq(1)
     if 'uncertain' in data:
         valid &= data.uncertain.eq(0)
     data = data.loc[valid].copy()
     data['label'] = data.spiral.astype(int)
+    # 3. Balance first, then split, so each partition can retain both classes.
     if per_class:
         data = pd.concat([data.loc[data.label.eq(label)].sample(n=per_class, random_state=seed) for label in (0, 1)], ignore_index=True)
     if 'split' not in data:
         data['split'] = None
+    # 4. Freeze partitions in the CSV and SQLite manifest before image downloads.
     data = assign_splits(data, seed)
     output.parent.mkdir(parents=True, exist_ok=True)
     data.to_csv(output, index=False)

@@ -16,8 +16,17 @@ BANDS = 'ugriz'
 
 
 def build_query(label, after, page_size):
+    """Build one read-only SQL page for a single Galaxy Zoo class.
+
+    label is 0 (elliptical) or 1 (spiral); after is the last exact specobjid,
+    and page_size is bounded to protect the public query service. Both DR7
+    and DR8 IDs participate in the join, avoiding every neighboring match.
+    Return a SQL string with explicit columns, quality cuts and sorted IDs.
+    No request is made here; first-ID pagination is not random sampling.
+    """
     if label not in (0, 1) or after < 0 or not 1 <= page_size <= 1000:
         raise ValueError('Invalid label, cursor, or page size.')
+    # Cast long IDs in SQL: floating-point conversion would lose object identity.
     columns = [
         'CONVERT(varchar(20),z.specobjid) AS specobjid',
         'CONVERT(varchar(20),z.objid) AS objid',
@@ -28,6 +37,7 @@ def build_query(label, after, page_size):
         'p.petroMag_r','p.petroMagErr_r','p.petroR50_r','p.petroR90_r',
     ]
     columns += [f'p.{prefix}_{b}' for prefix in ['modelMag','modelMagErr','extinction'] for b in BANDS]
+    # Use both ID systems; joining only dr7objid can return several DR8 neighbors.
     return f'''SELECT TOP {int(page_size)} {', '.join(columns)}
 FROM ZooSpec z
 JOIN PhotoObjDR7 p ON p.dr7objid=z.dr7objid AND p.dr8objid=z.objid
@@ -39,6 +49,12 @@ ORDER BY z.specobjid'''
 
 
 def query_rows(sql):
+    """Execute SQL against the public DR19 endpoint and return result-row dicts.
+
+    The response contains both the data table and a SQL echo table. Select
+    only Table1 so query metadata cannot accidentally become training rows.
+    Network/JSON failures propagate; malformed responses raise ValueError.
+    """
     request = Request(ENDPOINT + '?' + urlencode({'cmd':sql, 'format':'json'}),
                       headers={'User-Agent':'galaxy-ml-pipeline/2.0'})
     with urlopen(request, timeout=120) as response:
@@ -52,12 +68,21 @@ def query_rows(sql):
 
 
 def download_catalog(output, per_class=1200, page_size=500):
+    """Collect per_class qualifying rows for each class and persist the sample.
+
+    output is a new CSV path; page_size controls network query batch size.
+    Return the assembled DataFrame and save sibling provenance JSON with
+    source, units and executed SQL. IDs remain decimal text in the CSV.
+    Records stay in memory until collection finishes; queries do not resume
+    after a failed process. Existing output CSVs are never overwritten.
+    """
     output = Path(output)
     if output.exists():
         raise ValueError('Output exists; reuse it or choose a new output path.')
     if per_class < 1 or not 1 <= page_size <= 1000:
         raise ValueError('per-class must be positive; page-size must be 1..1000.')
     records, queries = [], []
+    # Collect classes separately so one common class cannot exhaust the row budget.
     for label in (0, 1):
         cursor, collected = 0, 0
         while collected < per_class:
@@ -66,6 +91,7 @@ def download_catalog(output, per_class=1200, page_size=500):
             queries.append(sql)
             if not rows:
                 raise ValueError(f'Only {collected} qualifying objects found for class {label}; requested {per_class}.')
+            # Python integers keep all digits; ordered cursors must advance strictly.
             ids = [int(row['specobjid']) for row in rows]
             if len(set(ids)) != len(ids) or ids != sorted(ids) or ids[0] <= cursor:
                 raise ValueError('Join produced duplicate IDs or an invalid page. Inspect the query; no records were arbitrarily discarded.')
@@ -79,6 +105,7 @@ def download_catalog(output, per_class=1200, page_size=500):
     if frame.specobjid.duplicated().any():
         raise ValueError('Duplicate specobjid across downloaded results.')
     output.parent.mkdir(parents=True, exist_ok=True)
+    # Publish the CSV only after both classes finish; no half-sample is a final input.
     temporary = output.with_suffix(output.suffix + '.part')
     frame.to_csv(temporary,index=False)
     temporary.replace(output)

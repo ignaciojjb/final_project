@@ -7,6 +7,11 @@ from urllib.request import urlopen
 
 
 def sha256(path):
+    """Return a file's SHA256 hex digest without loading it all into memory.
+
+    path is any readable local file. Chunked hashing is also used to identify
+    input files/source code for feature-cache reproducibility checks.
+    """
     digest = hashlib.sha256()
     with open(path, 'rb') as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b''):
@@ -15,6 +20,13 @@ def sha256(path):
 
 
 def download(url, output, expected):
+    """Download a known HTTPS resource into output and verify its SHA256.
+
+    expected is an independently supplied digest, not a checksum invented
+    from the downloaded response. A matching existing file is reused; a
+    mismatching file is preserved and rejected. Write via a temporary file
+    and remove incomplete data on failure. This transfer does not resume.
+    """
     if not url.startswith('https://'):
         raise ValueError('An HTTPS download URL is required.')
     output = Path(output)
@@ -24,12 +36,14 @@ def download(url, output, expected):
             return
         raise ValueError(f'{output} exists with a different checksum; preserve or move it first.')
     output.parent.mkdir(parents=True, exist_ok=True)
+    # A temporary pathname prevents an interrupted transfer looking like a complete input.
     temporary = output.with_suffix(output.suffix + '.part')
     try:
         with urlopen(url, timeout=120) as response, temporary.open('wb') as stream:
             if not response.geturl().startswith('https://'):
                 raise ValueError('Download redirected away from HTTPS.')
             shutil.copyfileobj(response, stream)
+        # Validate against the expected source checksum before accepting the final file.
         if sha256(temporary) != expected.lower():
             raise ValueError('SHA256 mismatch; download not accepted.')
         temporary.replace(output)

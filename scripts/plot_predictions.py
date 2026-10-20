@@ -20,12 +20,26 @@ NAMES = {0: 'Elliptical', 1: 'Spiral'}
 
 
 def display_image(blob, metadata, resolution, cache):
-    """Fetch only a selected object's display cutout; never write to the dataset."""
+    """Return a higher-resolution image for ONE already-selected gallery row.
+
+    blob is the original fallback stamp; metadata is (ra, dec, fov_arcsec,
+    provider). resolution sets output pixels without changing sky coverage.
+    cache is a display-only directory keyed by request URL. Reuse valid
+    cached bytes; on a fetch/decode/write failure warn and return the original
+    stamp. Neither training BLOBs nor features/predictions are changed.
+    """
     ra, dec, fov, provider = metadata
+    # More display pixels cover the SAME angular field; training requests remain separate.
     url = cutout_url(ra, dec, fov, resolution, resolution, provider)
+    # URL hashing ties cached pixels to center, provider, field size and resolution.
     target = Path(cache) / (hashlib.sha256(url.encode()).hexdigest() + '.jpg')
 
     def decode(data):
+        """Decode a display response only if it has the requested pixel size.
+
+        Copy RGB pixels before closing the source so the returned image no
+        longer depends on the byte stream. Shape does not verify identity.
+        """
         with Image.open(BytesIO(data)) as image:
             if image.size != (resolution, resolution):
                 raise ValueError(f'Expected {resolution}x{resolution}, received {image.size}')
@@ -54,6 +68,15 @@ def display_image(blob, metadata, resolution, cache):
 
 def plot_predictions(run, database, count=10, split='test', seed=42, errors_only=False, output=None,
                      display_resolution=None):
+    """Render a reproducible held-out gallery and return its PNG path.
+
+    run supplies saved predictions; database supplies matching image BLOBs.
+    count/split/seed/errors_only control selection BEFORE any display request.
+    output is a PNG filename, unlike plot_results' directory option.
+    display_resolution=None uses original stamps; otherwise only selected
+    objects are fetched at that resolution and separately cached. Validate
+    IDs/labels/splits and legacy request units without altering the dataset.
+    """
     if count < 1:
         raise ValueError('count must be positive.')
     if display_resolution is not None and not 64 <= display_resolution <= 1024:
@@ -67,10 +90,12 @@ def plot_predictions(run, database, count=10, split='test', seed=42, errors_only
         raise ValueError(f'No saved predictions match split={split}, errors_only={errors_only}.')
     if rows.specobjid.isna().any() or rows.specobjid.duplicated().any():
         raise ValueError('Saved prediction IDs must be non-null and unique within the selected split.')
+    # Select first: only these count objects can trigger high-resolution requests.
     rows = rows.sample(n=min(count, len(rows)), random_state=seed)
     if not database.is_file():
         raise FileNotFoundError(database)
     images = []
+    # Read-only SQLite access guarantees display downloads cannot replace training BLOBs.
     with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as connection:
         validate_stored_requests(connection)
         for row in rows.itertuples(index=False):
@@ -83,6 +108,7 @@ def plot_predictions(run, database, count=10, split='test', seed=42, errors_only
             blob, label, stored_split = record
             if label != row.label or (stored_split is not None and stored_split != split):
                 raise ValueError(f'Database label/split disagrees with predictions for {row.specobjid}.')
+            # Images added here are display-only, with the original bytes available as fallback.
             if display_resolution is not None:
                 metadata = connection.execute(
                     'SELECT ra, dec, fov_arcsec, provider FROM cutouts WHERE object_id=?',
@@ -98,6 +124,7 @@ def plot_predictions(run, database, count=10, split='test', seed=42, errors_only
                              figsize=(3.2 * columns, 3.5 * math.ceil(len(images) / columns)),
                              squeeze=False, constrained_layout=True)
     for axis, (row, image) in zip(axes.flat, images):
+        # 'Correct' means agreement with the catalog reference, not independent visual truth.
         correct = row.label == row.prediction
         axis.imshow(image)
         axis.set_title(f'Catalog: {NAMES[row.label]}\nPredicted: {NAMES[row.prediction]}',

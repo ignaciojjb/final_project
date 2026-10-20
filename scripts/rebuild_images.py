@@ -8,13 +8,22 @@ from scripts.ml_training import assign_splits
 
 
 def rebuild(catalog, database, provider='hips2fits'):
+    """Create a NEW corrected manifest without resampling a prepared catalog.
+
+    catalog must contain complete, valid splits and labels; database must
+    not exist. provider selects the image service. Return inserted count.
+    The old image database and original CSV remain intact; image downloads,
+    new feature extraction and retraining are separate subsequent stages.
+    """
     if Path(database).exists():
         raise ValueError('Choose a NEW database path; old data will not be overwritten.')
     data = pd.read_csv(catalog, dtype={'specobjid': 'string'})
     data = validate_catalog_ids(data)
     if 'split' not in data or data['split'].isna().any():
         raise ValueError('An existing prepared catalog with complete splits is required.')
+    # Validate existing partitions only; all splits are present, so none are regenerated.
     assign_splits(data.assign(label=data.spiral.astype(int)))
+    # New URLs carry corrected units; old images/results remain available for audit.
     added = prepare_manifest(data, database, provider=provider, width=64, height=64)
     print(f'Created {added} pending images in {database}; catalog and splits unchanged.')
     return added

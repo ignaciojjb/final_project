@@ -13,11 +13,20 @@ from scripts.plot_roc import plot_roc
 
 
 def plot_results(run, output=None):
+    """Generate the saved-run plot collection and return its output directory.
+
+    run contains metrics.json and merged_features.csv, plus predictions and
+    a trusted saved model when older ROC results need reconstruction.
+    output defaults to run/plots. Figures may replace earlier same-named
+    plot files; source training artifacts are not changed. Correlation and
+    ROC helpers complete the plot set without fitting a model.
+    """
     run = Path(run)
     metrics = json.loads((run / 'metrics.json').read_text())
     output = Path(output) if output else run / 'plots'
     output.mkdir(parents=True, exist_ok=True)
     names = ['Elliptical', 'Spiral']
+    # 1. Confusion counts: rows are reference classes and columns predicted classes.
     fig, axes = plt.subplots(1, 2, figsize=(10, 4), constrained_layout=True)
     for axis, split in zip(axes, ['validation', 'test']):
         matrix = np.asarray(metrics[split]['confusion_matrix'])
@@ -26,6 +35,7 @@ def plot_results(run, output=None):
     fig.savefig(output / 'confusion_matrices.png', dpi=180)
     plt.close(fig)
 
+    # 2. Balanced accuracy averages class recalls, making unequal class counts visible.
     fig, axis = plt.subplots(figsize=(8, 4), constrained_layout=True)
     x = np.arange(2)
     for offset, split, color in [(-.18, 'validation', '#2878b5'), (.18, 'test', '#e07b39')]:
@@ -50,6 +60,7 @@ def plot_results(run, output=None):
     fig.savefig(output / 'per_class_scores.png', dpi=180)
     plt.close(fig)
 
+    # 3. This is a two-dimensional view of image PCs, not the full SVC decision boundary.
     table = pd.read_csv(run / 'merged_features.csv', dtype={'specobjid': str})
     components = [c for c in table if c.startswith('stamp__pca')]
     if len(components) >= 2:
@@ -63,6 +74,7 @@ def plot_results(run, output=None):
         fig.suptitle('First two image components only; SVC uses all merged features', fontsize=11)
         fig.savefig(output / 'pca_projection.png', dpi=180)
         plt.close(fig)
+    # 4. Companion plots reuse saved artifacts; neither helper refits model parameters.
     plot_correlations(run, output)
     plot_roc(run, output)
     print(f'Plots saved to {output.resolve()}')

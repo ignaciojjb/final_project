@@ -1,5 +1,5 @@
-from contextlib import closing
 """Import ZIP images into an existing manifest through an explicit ID/path mapping."""
+from contextlib import closing
 import argparse
 from io import BytesIO
 from pathlib import Path
@@ -10,11 +10,21 @@ from PIL import Image
 
 
 def import_stamps(archive, mapping, database):
+    """Import ZIP members into an existing manifest using a mapping CSV.
+
+    mapping requires unique text specobjid and exact image_path member names.
+    Objects outside the manifest or already downloaded are skipped. Verify
+    decoding and the per-image size bound before writing BLOBs in a database
+    transaction; the ZIP is never extracted into the filesystem. Reference
+    labels/splits come from the manifest, not filenames. Returns None.
+    """
+    # Filename conventions are not object identity: use the explicit, exact member mapping.
     mapping = pd.read_csv(mapping, dtype=str)
     if not {'specobjid', 'image_path'}.issubset(mapping):
         raise ValueError('Mapping CSV needs specobjid,image_path columns (exact ZIP member names).')
     if mapping.isna().any().any() or mapping.specobjid.duplicated().any() or mapping.image_path.duplicated().any():
         raise ValueError('Mapping must contain unique non-null IDs and image paths.')
+    # closing() releases the handle on Windows; the separate 'con' context commits/rolls back.
     with zipfile.ZipFile(archive) as source, closing(sqlite3.connect(Path(database).resolve().as_uri() + '?mode=rw', uri=True)) as con, con:
         imported = 0
         for row in mapping.itertuples(index=False):
@@ -24,6 +34,7 @@ def import_stamps(archive, mapping, database):
             info = source.getinfo(row.image_path)
             if info.file_size > 20 * 1024 * 1024:
                 raise ValueError(f'Image too large: {row.image_path}')
+            # Read one bounded member into memory; no filesystem extraction is required.
             blob = source.read(info)
             with Image.open(BytesIO(blob)) as image:
                 image.verify()

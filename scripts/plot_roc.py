@@ -13,6 +13,14 @@ from sklearn.metrics import roc_auc_score, roc_curve
 
 
 def load_scores(run):
+    """Return held-out prediction rows with finite continuous decision scores.
+
+    Prefer decision_score already saved in predictions.csv. For older runs,
+    load the trusted model and align transformed feature rows by ID, checking
+    labels and splits. Apply only the fitted SVC so features are not scaled
+    twice. Positive scores favor spiral (1) for class order [0,1].
+    The original predictions/features are not rewritten.
+    """
     run = Path(run)
     predictions = pd.read_csv(run / 'predictions.csv', dtype={'specobjid': 'string'})
     required = {'specobjid', 'label', 'split'}
@@ -29,12 +37,14 @@ def load_scores(run):
         classifier = model.named_steps['svc']
         if list(classifier.classes_) != [0, 1]:
             raise ValueError('Saved classifier must have class order [0, 1].')
+        # Recover the fitted transform's exact output order before selecting saved columns.
         names = list(model.named_steps['features'].get_feature_names_out())
         table = pd.read_csv(run / 'merged_features.csv', dtype={'specobjid': 'string'})
         if table.specobjid.isna().any() or table.specobjid.duplicated().any():
             raise ValueError('Feature table IDs must be non-null and unique.')
         if not set(names).issubset(table):
             raise ValueError('Saved feature table does not match the fitted preprocessing.')
+        # Row order can differ between CSVs: join by identity and verify label/split consistency.
         aligned = predictions.merge(table[['specobjid', 'label', 'split', *names]],
                                     on='specobjid', how='left', validate='one_to_one',
                                     suffixes=('', '_features'), indicator=True)
@@ -45,6 +55,7 @@ def load_scores(run):
         values = aligned[names].to_numpy(dtype=float)
         if not np.isfinite(values).all():
             raise ValueError('Saved model features must be finite.')
+        # These are transformed inputs already; only call SVC, never model.decision_function.
         predictions['decision_score'] = classifier.decision_function(values)
     if not np.isfinite(predictions.decision_score.to_numpy(dtype=float)).all():
         raise ValueError('ROC decision scores must be finite.')
@@ -52,15 +63,24 @@ def load_scores(run):
 
 
 def plot_roc(run, output=None):
+    """Plot ROC curves and return AUC/count summaries for validation and test.
+
+    run is a trained-run directory; output defaults to run/plots. Save a PNG,
+    numerical JSON summary and curve-point CSV. Use continuous SVC scores,
+    not hard predictions or calibrated probabilities. Both reference classes
+    are required in each split. No threshold tuning or retraining occurs.
+    """
     run = Path(run)
     rows = load_scores(run)
     curves, summary = [], {'positive_class': 1, 'positive_class_name': 'spiral',
                             'score_type': 'SVC decision_function (not a probability)'}
+    # Separate curves prevent a pooled held-out AUC from hiding split-specific behavior.
     for split in ['validation', 'test']:
         subset = rows.loc[rows['split'].eq(split)]
         if set(subset.label) != {0, 1}:
             raise ValueError(f'ROC/AUC is undefined: {split} must contain both classes.')
         scores = subset.decision_score.to_numpy(dtype=float)
+        # Sweep continuous margins; hard labels provide only a single operating point.
         fpr, tpr, thresholds = roc_curve(subset.label, scores, pos_label=1)
         auc = float(roc_auc_score(subset.label, scores))
         summary[split] = {'roc_auc': auc, 'n': len(subset),
@@ -75,6 +95,7 @@ def plot_roc(run, output=None):
         split = curve['split'].iloc[0]
         axis.plot(curve.false_positive_rate, curve.true_positive_rate,
                   label=f'{split.title()} (AUC = {summary[split]["roc_auc"]:.3f})', linewidth=2)
+    # The diagonal is the chance ranking reference, not an additional fitted model.
     axis.plot([0, 1], [0, 1], '--', color='gray', label='Chance (AUC = 0.5)')
     axis.set(xlabel='False positive rate', ylabel='True positive rate (spiral recall)',
              title='Held-out ROC curves — positive class: spiral', xlim=(0, 1), ylim=(0, 1.02))

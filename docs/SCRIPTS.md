@@ -4,6 +4,14 @@
 
 Use modules from the repository root: `python -m scripts.MODULE --help`, with your venv's Python. The full workflow uses explicit filenames because historical entry points do not all share the same defaults. This reference describes the code as implemented; there is no single command that silently runs every stage.
 
+## Reading the annotated code
+
+Every function/class in `scripts/` has an explanatory docstring. Function docstrings describe expected inputs, returned objects, saved artifacts and relevant failure behavior. Numbered inline comments trace the larger stages; other comments explain unit boundaries, training-only fitting, ID alignment and resource ownership where the reasoning matters.
+
+Read the main flow in this order: `download_catalog.download_catalog` → `prepare_data.prepare` → `cutouts.prepare_manifest` / `download_pending` → `ml_training.load_dataset` / `photometry.build_photometry` → `extract_features.extract` → `train_model.train_cached` → plotting functions. Read `make_pipeline` alongside feature extraction to see exactly how image and catalog branches merge. CLI blocks at the bottom supply parameters to these functions.
+
+The cache signature hashes complete implementation files, including comments and docstrings. Documentation-only edits leave the algorithm unchanged but can make a repeated `extract_features` check report an old cache as stale. Existing compatible version-2 caches remain usable by `train_model`, and saved runs remain usable for plotting; you do not need to rerun extraction just to read annotated code. If deliberately recomputing, use a new cache output path.
+
 ## Download and preparation modules
 
 | Module | Main functions | Role |

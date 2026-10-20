@@ -27,6 +27,7 @@ import pandas as pd
 import certifi
 
 
+# Request metadata stays beside each BLOB so retries, units and labels are auditable.
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS cutouts (
     object_id TEXT PRIMARY KEY,
@@ -54,6 +55,11 @@ CREATE INDEX IF NOT EXISTS idx_cutouts_label ON cutouts(label);
 
 @dataclass(frozen=True)
 class DownloadResult:
+    """One worker's download outcome, passed back to the SQLite writer.
+
+    image/mime_type are present for success; image is None on failure and
+    error describes the last attempt. Workers do not mutate the database.
+    """
     object_id: str
     image: bytes | None
     mime_type: str | None
@@ -68,11 +74,18 @@ def cutout_url(
     height: int = 128,
     provider: str = "hips2fits",
 ) -> str:
-    """Build a JPEG request for one of the supplied cutout services."""
+    """Build a provider URL from sky coordinates and angular coverage.
+
+    ra/dec are ICRS degrees; fov_arcsec is the largest image dimension on
+    the sky in arcseconds. width/height are pixel counts, not angular sizes.
+    hips2fits requires FOV in degrees; SkyServer requires arcsec per pixel.
+    Return the URL only. Invalid coordinates/dimensions/provider fail here.
+    """
     if not (math.isfinite(ra) and 0 <= ra < 360 and math.isfinite(dec) and -90 <= dec <= 90):
         raise ValueError('RA must be in [0,360) degrees and Dec in [-90,90] degrees.')
     if not math.isfinite(fov_arcsec) or fov_arcsec <= 0 or width < 1 or height < 1:
         raise ValueError('Field of view and pixel dimensions must be positive.')
+    # Unit boundary: manifests store arcseconds, but CDS expects decimal degrees.
     if provider == "hips2fits":
         return (
             "https://alasky.cds.unistra.fr/hips-image-services/hips2fits"
@@ -80,6 +93,7 @@ def cutout_url(
             f"&fov={fov_arcsec / 3600.0:.10f}&width={width}&height={height}"
             "&projection=TAN&format=jpg"
         )
+    # Keep the same sky coverage when pixel dimensions change for a display request.
     if provider == "sdss":
         # SDSS scale is expressed in arcsec/pixel.
         scale = fov_arcsec / max(width, height)
@@ -97,7 +111,13 @@ def _download_one(
     timeout: float,
     retries: int,
 ) -> DownloadResult:
-    """Download and minimally validate one image, with bounded retries."""
+    """Fetch and decode one JPEG/PNG, returning a DownloadResult.
+
+    timeout applies per network request; retries counts additional attempts
+    after the first. TLS validation remains enabled. Check requested pixel
+    dimensions as well as image decoding; neither proves source identity
+    or that the stamp contains one isolated galaxy. No SQLite writes occur.
+    """
     last_error = "download failed"
     ssl_context = ssl.create_default_context(cafile=certifi.where())
     for attempt in range(retries + 1):
@@ -110,6 +130,7 @@ def _download_one(
                 raise ValueError("empty response")
             if not (image.startswith(b"\xff\xd8") or image.startswith(b"\x89PNG")):
                 raise ValueError("response is not a JPEG or PNG image")
+            # Header signatures alone can accept corrupt/truncated image responses.
             with Image.open(BytesIO(image)) as decoded:
                 decoded.verify()
             expected = parse_qs(urlsplit(url).query)
@@ -126,6 +147,12 @@ def _download_one(
 
 
 def _connect(path: Path) -> sqlite3.Connection:
+    """Open/create a manifest database and initialize schema/WAL mode.
+
+    Creates parent directories as needed and returns an open connection.
+    The caller owns that connection and must close it explicitly; a sqlite3
+    transaction context alone does not release Windows file handles.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
     connection.execute("PRAGMA journal_mode=WAL")
@@ -145,7 +172,15 @@ def prepare_manifest(
     max_fov_arcsec: float = 120.0,
     fov_multiplier: float = 3.0,
 ) -> int:
-    """Insert candidate objects and return the number newly added."""
+    """Insert image requests for catalog rows and return the number added.
+
+    data supplies IDs, coordinates, class flags and optionally fixed splits.
+    No images are downloaded here. Derive angular coverage from positive
+    petroR90_r (a radius in arcseconds), bounded by the supplied FOV limits;
+    a generic size field has no assumed angular unit. Existing IDs are
+    ignored by INSERT OR IGNORE, so rerunning cannot update their requests.
+    Default helper dimensions are 128; staged preparation passes 64.
+    """
     required = {"ra", "dec", "spiral", "elliptical"}
     missing = required.difference(data.columns)
     if missing:
@@ -169,12 +204,14 @@ def prepare_manifest(
             fov = min_fov_arcsec if size_arcsec is None else max(
                 min_fov_arcsec, min(max_fov_arcsec, fov_multiplier * size_arcsec)
             )
+            # This manifest assumes the caller has removed ambiguous morphology flags.
             label = int(values["spiral"] > values["elliptical"])
             split = values.get("split")
             split = None if split is None or pd.isna(split) else str(split)
             url = cutout_url(
                 float(values["ra"]), float(values["dec"]), fov, width, height, provider
             )
+            # Do not overwrite a prior request/BLOB; migrations need a new database.
             cursor = connection.execute(
                 """INSERT OR IGNORE INTO cutouts
                 (object_id, ra, dec, label, split, size_arcsec, provider, width,
@@ -193,7 +230,13 @@ def prepare_manifest(
 
 
 def validate_stored_requests(connection):
-    """Reject legacy hips2fits requests with arcsecond values in degree parameters."""
+    """Reject known legacy hips2fits requests with incorrect FOV units.
+
+    connection must refer to a cutouts table. Compare stored request fov in
+    degrees to fov_arcsec/3600, without changing any database contents.
+    Raise ValueError with migration guidance if they disagree. Minimal
+    external schemas lacking provenance cannot receive this check.
+    """
     columns = {row[1] for row in connection.execute('PRAGMA table_info(cutouts)')}
     if not {'provider', 'url', 'fov_arcsec'}.issubset(columns):
         return  # Minimal externally supplied SQLite schemas have no request provenance.
@@ -226,13 +269,21 @@ def download_pending(
     retry_errors: bool = False,
     progress_every: int = 10,
 ) -> tuple[int, int]:
-    """Download pending rows in parallel; return ``(successful, failed)``."""
+    """Download pending/retryable image rows, persist outcomes, and count them.
+
+    workers limits concurrent network requests; retry_errors includes rows
+    previously marked error, while retries applies within each worker.
+    Return (successful, failed). Worker threads fetch bytes only; one main
+    connection serializes SQLite writes and commits each completed image.
+    Existing downloaded rows are skipped, making this stage resumable.
+    """
     connection = _connect(Path(database))
     try:
         validate_stored_requests(connection)
     except Exception:
         connection.close()
         raise
+    # A repeat run targets incomplete rows only; successful downloads stay untouched.
     statuses = ("pending", "error") if retry_errors else ("pending",)
     placeholders = ",".join("?" for _ in statuses)
     rows = connection.execute(
@@ -244,6 +295,7 @@ def download_pending(
     successful = failed = 0
     total = len(rows)
     connection = _connect(Path(database))
+    # Parallelize HTTP work, then serialize each result through this thread's SQLite connection.
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
             executor.submit(_download_one, object_id, url, timeout, retries): object_id
@@ -286,7 +338,12 @@ def download_pending(
 
 
 def status(database: str | Path) -> dict[str, int]:
-    """Return counts by download status without downloading anything."""
+    """Return status-to-count mappings for a cutouts database.
+
+    This helper initializes a missing database through _connect; callers
+    checking readiness should first confirm the intended file exists.
+    Counts describe download state, not image identity or model quality.
+    """
     connection = _connect(Path(database))
     try:
         rows = connection.execute(
@@ -302,7 +359,13 @@ def iter_images(
     labels: Iterable[int] = (0, 1),
     split: str | None = None,
 ):
-    """Yield ``(object_id, image_bytes, label)`` for training data loaders."""
+    """Yield (object_id, image_bytes, label) for downloaded rows in ID order.
+
+    labels filters reference classes and split optionally selects a held-out
+    or training partition. Iteration keeps a connection open until exhausted
+    or the generator is closed; the finally block releases that resource.
+    Bytes are not decoded or resized by this iterator.
+    """
     labels = tuple(labels)
     connection = sqlite3.connect(database)
     placeholders = ",".join("?" for _ in labels)
@@ -323,6 +386,11 @@ def iter_images(
 
 
 def main() -> None:
+    """Parse the legacy cutout CLI and run status inspection or downloading.
+
+    The recommended staged path uses prepare_data then download_images.
+    This direct entry point keeps its older manifest dimension defaults.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("csv", type=Path, nargs="?")
     parser.add_argument(
