@@ -8,6 +8,10 @@ which makes interrupted downloads safe to resume and the dataset auditable.
 from __future__ import annotations
 
 import argparse
+import math
+from io import BytesIO
+from urllib.parse import urlsplit, parse_qs
+from PIL import Image
 import ssl
 import sqlite3
 import time
@@ -65,11 +69,15 @@ def cutout_url(
     provider: str = "hips2fits",
 ) -> str:
     """Build a JPEG request for one of the supplied cutout services."""
+    if not (math.isfinite(ra) and 0 <= ra < 360 and math.isfinite(dec) and -90 <= dec <= 90):
+        raise ValueError('RA must be in [0,360) degrees and Dec in [-90,90] degrees.')
+    if not math.isfinite(fov_arcsec) or fov_arcsec <= 0 or width < 1 or height < 1:
+        raise ValueError('Field of view and pixel dimensions must be positive.')
     if provider == "hips2fits":
         return (
             "https://alasky.cds.unistra.fr/hips-image-services/hips2fits"
             f"?hips=CDS%2FP%2FSDSS9%2Fcolor&ra={ra:.8f}&dec={dec:.8f}"
-            f"&fov={fov_arcsec:.5f}&width={width}&height={height}"
+            f"&fov={fov_arcsec / 3600.0:.10f}&width={width}&height={height}"
             "&projection=TAN&format=jpg"
         )
     if provider == "sdss":
@@ -102,6 +110,13 @@ def _download_one(
                 raise ValueError("empty response")
             if not (image.startswith(b"\xff\xd8") or image.startswith(b"\x89PNG")):
                 raise ValueError("response is not a JPEG or PNG image")
+            with Image.open(BytesIO(image)) as decoded:
+                decoded.verify()
+            expected = parse_qs(urlsplit(url).query)
+            if 'width' in expected and 'height' in expected:
+                with Image.open(BytesIO(image)) as decoded:
+                    if decoded.size != (int(expected['width'][0]), int(expected['height'][0])):
+                        raise ValueError('Downloaded image dimensions differ from the request')
             return DownloadResult(object_id, image, mime_type, None)
         except (HTTPError, URLError, TimeoutError, ValueError, OSError) as exc:
             last_error = str(exc)[:500]
@@ -127,7 +142,7 @@ def prepare_manifest(
     width: int = 128,
     height: int = 128,
     min_fov_arcsec: float = 16.0,
-    max_fov_arcsec: float = 40.0,
+    max_fov_arcsec: float = 120.0,
     fov_multiplier: float = 3.0,
 ) -> int:
     """Insert candidate objects and return the number newly added."""
@@ -147,8 +162,10 @@ def prepare_manifest(
             object_id = str(values[object_column])
             if pd.isna(values["ra"]) or pd.isna(values["dec"]):
                 continue
-            size = values.get("size")
-            size_arcsec = None if pd.isna(size) else float(size)
+            # petroR90_r is a radius in arcseconds; use it only when explicitly present.
+            # Generic catalog `size` has unknown units and is never assumed to be arcseconds.
+            size = values.get('petroR90_r')
+            size_arcsec = None if size is None or pd.isna(size) or not math.isfinite(float(size)) or float(size) <= 0 else float(size)
             fov = min_fov_arcsec if size_arcsec is None else max(
                 min_fov_arcsec, min(max_fov_arcsec, fov_multiplier * size_arcsec)
             )
@@ -175,6 +192,31 @@ def prepare_manifest(
     return added
 
 
+def validate_stored_requests(connection):
+    """Reject legacy hips2fits requests with arcsecond values in degree parameters."""
+    columns = {row[1] for row in connection.execute('PRAGMA table_info(cutouts)')}
+    if not {'provider', 'url', 'fov_arcsec'}.issubset(columns):
+        return  # Minimal externally supplied SQLite schemas have no request provenance.
+    for object_id, provider, url, fov in connection.execute(
+        'SELECT object_id, provider, url, fov_arcsec FROM cutouts'
+    ):
+        if provider != 'hips2fits':
+            continue
+        query = parse_qs(urlsplit(url).query)
+        try:
+            requested = float(query['fov'][0])
+            correct = math.isclose(requested, float(fov) / 3600., rel_tol=1e-6, abs_tol=1e-10)
+        except (KeyError, IndexError, ValueError, TypeError):
+            correct = False
+        if not correct:
+            raise ValueError(
+                f'Invalid or legacy hips2fits FOV units for {object_id}. '
+                'Do not reuse these images/features. Run python -m scripts.rebuild_images '
+                '--catalog YOUR_PREPARED_CSV --database NEW_DATABASE, then download, '
+                'extract features to a new cache, and retrain to a new run directory.'
+            )
+
+
 def download_pending(
     database: str | Path,
     *,
@@ -186,6 +228,11 @@ def download_pending(
 ) -> tuple[int, int]:
     """Download pending rows in parallel; return ``(successful, failed)``."""
     connection = _connect(Path(database))
+    try:
+        validate_stored_requests(connection)
+    except Exception:
+        connection.close()
+        raise
     statuses = ("pending", "error") if retry_errors else ("pending",)
     placeholders = ",".join("?" for _ in statuses)
     rows = connection.execute(
@@ -294,7 +341,7 @@ def main() -> None:
         return
     if args.csv is None:
         parser.error("csv is required unless --status is used")
-    data = pd.read_csv(args.csv)
+    data = pd.read_csv(args.csv, dtype={"specobjid": "string", "objid": "string"})
     if args.limit is not None:
         data = data.head(args.limit)
     added = prepare_manifest(data, args.database, provider=args.provider)

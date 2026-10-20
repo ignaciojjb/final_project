@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from PIL import Image
 
-from scripts.cutouts import cutout_url, _download_one
+from scripts.cutouts import cutout_url, _download_one, validate_stored_requests
 
 NAMES = {0: 'Elliptical', 1: 'Spiral'}
 
@@ -72,6 +72,7 @@ def plot_predictions(run, database, count=10, split='test', seed=42, errors_only
         raise FileNotFoundError(database)
     images = []
     with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as connection:
+        validate_stored_requests(connection)
         for row in rows.itertuples(index=False):
             record = connection.execute(
                 "SELECT image, label, split FROM cutouts WHERE object_id=? AND status='downloaded'",

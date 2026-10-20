@@ -3,15 +3,16 @@ import argparse
 from pathlib import Path
 import joblib
 from scripts.download_data import sha256
+from scripts.photometry import FEATURE_DEFINITIONS
 from scripts.ml_training import assign_splits, load_dataset, make_pipeline
 
 
 def extract(catalog, database, output, components=64, seed=42):
     output = Path(output)
-    signature = {'catalog': sha256(catalog), 'database': sha256(database),
+    signature = {'photometry_version': 2, 'catalog': sha256(catalog), 'database': sha256(database),
                  'wal': sha256(str(database) + '-wal') if Path(str(database) + '-wal').exists() else None,
                  'components': components, 'seed': seed,
-                 'implementation': [sha256(Path(__file__)), sha256(Path(__file__).with_name('ml_training.py'))]}
+                 'implementation': [sha256(Path(__file__)), sha256(Path(__file__).with_name('ml_training.py')), sha256(Path(__file__).with_name('photometry.py')), sha256(Path(__file__).with_name('cutouts.py'))]}
     if output.exists():
         cached = joblib.load(output)
         if cached['signature'] != signature:
@@ -27,7 +28,7 @@ def extract(catalog, database, output, components=64, seed=42):
     preprocessing.fit(data.loc[training])
     cache = {'signature': signature, 'preprocessing': preprocessing,
              'X': preprocessing.transform(data), 'metadata': data[['specobjid', 'label', 'split']],
-             'catalog_features': columns}
+             'catalog_features': columns, 'feature_definitions': {c: FEATURE_DEFINITIONS[c] for c in columns}}
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = output.with_suffix('.tmp')
     joblib.dump(cache, temporary)

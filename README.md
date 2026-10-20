@@ -1,5 +1,7 @@
 # Pipeline de clasificación de galaxias
 
+> **Important correction:** earlier hips2fits downloads used arcseconds where the API requires degrees. Rebuild affected images, features and models before interpreting results. See [DOWNLOAD_GUIDE.md](DOWNLOAD_GUIDE.md) for the verified units, SDSS photometry choices, real catalog-download command and safe migration preserving existing splits. Current features are defined in `scripts/photometry.py`; the earlier raw-column feature selection has been replaced.
+
 Python 3.12. Ejecutar desde `/workspace/final_project`. No hay que compilar para reentrenar. Cada etapa guarda sus resultados y se ejecuta por separado.
 
 ```bash
@@ -15,6 +17,8 @@ Los adjuntos `ZooSpecPhotoDR19_stamps.csv` y `ZooStamps.zip` superan el límite 
 python -m scripts.download_data --url 'https://HOST/catalog.csv' --sha256 CHECKSUM --output datasets/raw/catalog.csv
 python -m scripts.download_data --url 'https://HOST/stamps.zip' --sha256 CHECKSUM --output datasets/raw/stamps.zip
 ```
+
+Para obtener un catálogo directamente del API público de SDSS sin URL externa, ejecuta `python -m scripts.download_catalog --per-class 1200 --output datasets/raw/sdss_catalog_v2.csv`; consulta DOWNLOAD_GUIDE.md para la selección, el join y sus limitaciones.
 
 Los archivos existentes se reutilizan solo si su checksum coincide. No se imprimen ni guardan URLs con credenciales. Para destinos nuevos, añadir su dominio en la configuración de red. Esta ruta usa un catálogo exportado: no vuelve a ejecutar consultas destructivas de SciServer ni solicita credenciales.
 
@@ -75,7 +79,7 @@ Para archivos grandes, la matriz de 4096 píxeles requiere memoria considerable.
 
 `setup_environment.sh` instala/verifica dependencias y ejecuta las pruebas; no descarga datos ni inicia entrenamientos automáticamente. No requiere procesos de servidor persistentes. Las instrucciones de inicio del entorno deben activar `.venv`, reutilizar el checkout existente y conservar `datasets/` y `artifacts/`. Publicar el entorno es una operación de la interfaz del producto; guardar su borrador no lo publica.
 
-Estado de red comprobado durante la preparación: una petición real de un recorte a hips2fits devolvió `Tunnel connection failed: 403 Forbidden` del proxy. Se guardaron `alasky.cds.unistra.fr` y `skyserver.sdss.org` en la lista de dominios del borrador, conservando los presets. Guardar ese borrador no aplica la política al runtime; tras guardar/publicar desde la interfaz, repetir `python -m scripts.download_images`. No se ha acreditado todavía una descarga real de recortes. Se verificó el instalador y pasaron las 6 pruebas sintéticas.
+Estado de red comprobado durante la preparación: una petición real de un recorte a hips2fits devolvió `Tunnel connection failed: 403 Forbidden` del proxy. Se guardaron `alasky.cds.unistra.fr` y `skyserver.sdss.org` en la lista de dominios del borrador, conservando los presets. Guardar ese borrador no aplica la política al runtime; tras guardar/publicar desde la interfaz, repetir `python -m scripts.download_images`. No se ha acreditado todavía una descarga real de recortes. Ese fue el estado inicial. La auditoría posterior comprobó acceso real al API SQL y descargas de hips2fits con unidades corregidas; ver DOWNLOAD_GUIDE.md para la validación actual.
 
 Si `specobjid` tiene múltiples coincidencias DR8, se puede añadir `--resolve-dr8-matches` a `scripts.prepare_data`. Esta opción conserva la fila de menor `distance` únicamente cuando todas las columnas salvo `dr8objid` y `distance` coinciden, los IDs de coincidencia están presentes y las distancias son finitas, no negativas y tienen un mínimo único. Rechaza empates y diferencias en otras columnas. El catálogo original se conserva; se informa el número de filas resueltas. Utilizar solo si `distance` representa la separación de la coincidencia DR8.
 

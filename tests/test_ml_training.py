@@ -35,7 +35,7 @@ class TrainingTests(unittest.TestCase):
                 buffer = io.BytesIO()
                 Image.fromarray(image).save(buffer, format='PNG')
                 con.execute('INSERT INTO cutouts VALUES(?,?,?,?,?)', (object_id, buffer.getvalue(), label, split, 'downloaded'))
-                rows.append(dict(specobjid=object_id, spiral=label, elliptical=1-label, petroMag_r=15 + label, p_cs=label))
+                rows.append(dict(specobjid=object_id, spiral=label, elliptical=1-label, petroMag_r=15 + label, extinction_r=0., p_cs=label))
         catalog = root / 'catalog.csv'
         pd.DataFrame(rows).to_csv(catalog, index=False)
         return catalog, db
@@ -46,7 +46,7 @@ class TrainingTests(unittest.TestCase):
             catalog, db = self.fixture(root)
             model, metrics = train(catalog, db, root / 'output', n_components=64)
             data, features = load_dataset(catalog, db)
-            self.assertEqual(features, ['petroMag_r'])
+            self.assertEqual(features, ['petro_r0'])
             pca = model.named_steps['features'].named_transformers_['stamp'].named_steps['pca']
             self.assertEqual(pca.n_samples_, 80)
             self.assertEqual(metrics['test']['accuracy'], 1)

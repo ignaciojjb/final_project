@@ -20,6 +20,8 @@ def train_cached(features, output, c=1.0, gamma='scale'):
             '(requires a prepared catalog and downloaded/imported images).'
         )
     cache = joblib.load(features)  # Only use artifacts created by this project/trusted sources.
+    if cache.get('signature', {}).get('photometry_version') != 2:
+        raise ValueError('Legacy feature cache: extract new photometric features and retrain. For old hips2fits images, rebuild the image database first. See DOWNLOAD_GUIDE.md.')
     metadata, x = cache['metadata'], cache['X']
     classifier = SVC(C=c, gamma=gamma, kernel='rbf', class_weight='balanced')
     mask = metadata['split'].eq('train').to_numpy()
@@ -30,7 +32,7 @@ def train_cached(features, output, c=1.0, gamma='scale'):
     output.mkdir(parents=True)
     model = Pipeline([('features', cache['preprocessing']), ('svc', classifier)])
     joblib.dump(model, output / 'model.joblib')
-    report = {'C': c, 'gamma': gamma, 'feature_signature': cache['signature'], 'catalog_features': cache['catalog_features']}
+    report = {'C': c, 'gamma': gamma, 'feature_signature': cache['signature'], 'catalog_features': cache['catalog_features'], 'feature_definitions': cache.get('feature_definitions', {})}
     predictions = []
     for split in ('validation', 'test'):
         mask = metadata['split'].eq(split).to_numpy()

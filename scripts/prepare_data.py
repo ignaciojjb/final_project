@@ -47,7 +47,7 @@ def prepare(catalog, output, database, per_class=1000, seed=42, clean=True, reso
     output = Path(output)
     if output.exists() or Path(database).exists():
         raise ValueError('Prepared catalog or database already exists. Reuse it, or choose new paths.')
-    data = pd.read_csv(catalog, dtype={'specobjid': 'string'})
+    data = pd.read_csv(catalog, dtype={c: 'string' for c in ['specobjid','objid','dr7objid','dr8objid']})
     data = validate_catalog_ids(data, resolve_dr8_matches)
     if clean:
         data, log = clean_sample(data.replace(-9999, float('nan')))
@@ -63,9 +63,6 @@ def prepare(catalog, output, database, per_class=1000, seed=42, clean=True, reso
     if 'split' not in data:
         data['split'] = None
     data = assign_splits(data, seed)
-    # The supplied downloader expects size to be present.
-    if 'size' not in data:
-        data['size'] = float('nan')
     output.parent.mkdir(parents=True, exist_ok=True)
     data.to_csv(output, index=False)
     prepare_manifest(data, database, width=64, height=64)

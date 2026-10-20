@@ -22,13 +22,10 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.svm import SVC
 
+from scripts.photometry import build_photometry, FEATURE_DEFINITIONS
+from scripts.cutouts import validate_stored_requests
+
 PIXELS = [f'pixel_{i:04d}' for i in range(4096)]
-# Explicit allowlist: do not infer predictors from every numeric catalog column.
-CATALOG_FEATURES = [
-    'petroMag_r', 'petroMagErr_r', 'petroR50_r', 'petroR90_r',
-    'modelMag_u', 'modelMag_g', 'modelMag_r', 'modelMag_i', 'modelMag_z',
-    'extinction_u', 'extinction_g', 'extinction_r', 'extinction_i', 'extinction_z',
-]
 
 
 def stamp_to_features(blob: bytes) -> np.ndarray:
@@ -40,7 +37,7 @@ def stamp_to_features(blob: bytes) -> np.ndarray:
 
 def load_dataset(catalog_path, database_path):
     """Join by exact text IDs (never float IDs); reject ambiguous or stale labels."""
-    catalog = pd.read_csv(catalog_path, dtype={'specobjid': 'string'})
+    catalog = pd.read_csv(catalog_path, dtype={c: 'string' for c in ['specobjid','objid','dr7objid','dr8objid']})
     required = {'specobjid', 'spiral', 'elliptical'}
     if not required.issubset(catalog):
         raise ValueError(f'Missing catalog columns: {sorted(required - set(catalog))}')
@@ -51,16 +48,15 @@ def load_dataset(catalog_path, database_path):
     if 'uncertain' in catalog:
         valid &= catalog.uncertain.eq(0)
     catalog = catalog.loc[valid].copy()
-    features = [c for c in CATALOG_FEATURES if c in catalog]
-    if not features:
-        raise ValueError('No supported photometric catalog features found.')
-    for c in features:
-        catalog[c] = pd.to_numeric(catalog[c], errors='raise').replace([-9999, np.inf, -np.inf], np.nan)
+    engineered, features = build_photometry(catalog)
+    for column in features:
+        catalog[column] = engineered[column]
     database = Path(database_path).resolve()
     if not database.is_file():
         raise FileNotFoundError(database)
     vectors, records = [], []
     with closing(sqlite3.connect(database.as_uri() + '?mode=ro', uri=True)) as connection:
+        validate_stored_requests(connection)
         for object_id, blob, label, split in connection.execute(
             "SELECT object_id, image, label, split FROM cutouts WHERE status='downloaded' ORDER BY object_id"
         ):
@@ -126,6 +122,7 @@ def train(catalog, database, output, n_components=64, seed=42):
     model.fit(training, training.label)
     metrics = {'classes': {'0': 'elliptical', '1': 'spiral'}, 'seed': seed,
                'n_components': n_components, 'catalog_features': columns,
+               'feature_definitions': {c: FEATURE_DEFINITIONS[c] for c in columns},
                'split_counts': data.groupby(['split', 'label']).size().unstack(fill_value=0).to_dict(orient='index')}
     predictions = []
     for split in ['validation', 'test']:

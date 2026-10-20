@@ -28,8 +28,8 @@ def clean_sample(df, params=CLEANING_PARAMS):
     """Apply a series of cuts to the DataFrame and return the cleaned DataFrame along with a log of cuts."""
     log = []
     df = apply_cut(df, df["modeDR7"] == 1, "primary only", log)
-    df = apply_cut(df, df["nChild"] == 0, "not blended", log)
-    df = apply_cut(df, df["petroMagErr_r"] < params["max_mag_err"], "mag error", log)
+    df = apply_cut(df, df["nChild"] == 0, "no deblend children (not a guarantee of isolation)", log)
+    df = apply_cut(df, (df["petroMagErr_r"] >= 0) & (df["petroMagErr_r"] < params["max_mag_err"]), "mag error", log)
     df = apply_cut(df, df["petroMag_r"].between(*params["mag_range"]), "mag range", log)
     df = apply_cut(df, df["nvote"] >= params["min_nvote"], "enough votes", log)
     return df, pd.DataFrame(log, columns=["cut", "removed", "remaining"])
