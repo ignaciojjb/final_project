@@ -8,6 +8,7 @@ Classify galaxies as **elliptical (0)** or **spiral (1)** using an RBF support-v
 
 | Guide | What it covers |
 |---|---|
+| [Presentation report](docs/PROJECT_REPORT.md) | Brief account of collection, features, splits, algorithms and evaluation |
 | [Setup](docs/SETUP.md) | Windows/PowerShell with uv, Linux/macOS, tests and network prerequisites |
 | [Complete workflow](docs/WORKFLOW.md) | Commands from catalog download to training, plots, retraining and larger samples |
 | [Data and model](docs/DATA_AND_MODEL.md) | Catalog fields, image units, cleaning cuts, feature formulas, PCA, SVC and scientific limits |
